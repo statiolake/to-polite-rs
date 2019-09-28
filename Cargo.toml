@@ -10,3 +10,6 @@ edition = "2018"
 typed-igo = { git = "https://github.com/statiolake/typed-igo-rs" }
 conjugation = { git = "https://github.com/statiolake/conjugation-rs" }
 scopefunc = "0.1.0"
+
+[dev-dependencies]
+lazy_static = "1.4.0"
