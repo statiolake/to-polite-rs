@@ -8,24 +8,33 @@ pub fn to_polite_sentence(parser: &Parser, orig: &str) -> String {
         .parse(orig)
         .transform(break_into_parts)
         .into_iter()
-        .map(|(part, pp)| to_polite_part(part, pp))
+        .map(to_polite_part)
         .collect()
 }
 
-fn break_into_parts<'text, 'dict>(
-    orig: Vec<Morpheme<'text, 'dict>>,
-) -> Vec<(Vec<Morpheme<'text, 'dict>>, Morpheme<'text, 'dict>)> {
+struct Part<'t, 'd> {
+    morphs: Vec<Morpheme<'t, 'd>>,
+    sep: Morpheme<'t, 'd>,
+}
+
+impl<'t, 'd> Part<'t, 'd> {
+    fn new(morphs: Vec<Morpheme<'t, 'd>>, sep: Morpheme<'t, 'd>) -> Part<'t, 'd> {
+        Part { morphs, sep }
+    }
+}
+
+fn break_into_parts<'t, 'd>(orig: Vec<Morpheme<'t, 'd>>) -> Vec<Part<'t, 'd>> {
     let mut parts = Vec::new();
     let mut part = Vec::new();
     let mut paren_level = 0;
 
     fn add<'t, 'd>(
-        parts: &mut Vec<(Vec<Morpheme<'t, 'd>>, Morpheme<'t, 'd>)>,
-        part: &mut Vec<Morpheme<'t, 'd>>,
+        parts: &mut Vec<Part<'t, 'd>>,
+        morphs: &mut Vec<Morpheme<'t, 'd>>,
         sep: Morpheme<'t, 'd>,
     ) {
         use std::mem::replace;
-        parts.push((replace(part, Vec::new()), sep));
+        parts.push(Part::new(replace(morphs, Vec::new()), sep));
     }
 
     let mut iter = orig.into_iter().peekable();
@@ -81,14 +90,15 @@ fn break_into_parts<'text, 'dict>(
             pronunciation: "。",
             start: !0,
         };
-        parts.push((part, period));
+        parts.push(Part::new(part, period));
     }
 
     parts
 }
 
-fn to_polite_part(part: Vec<Morpheme>, sep: Morpheme) -> String {
-    let (last_orig, last_surface, last_class, last_conj) = match part.last() {
+fn to_polite_part(part: Part) -> String {
+    let Part { morphs, sep } = part;
+    let (last_orig, last_surface, last_class, last_conj) = match morphs.last() {
         Some(last) => (
             last.original_form,
             last.surface,
@@ -100,8 +110,8 @@ fn to_polite_part(part: Vec<Morpheme>, sep: Morpheme) -> String {
 
     // 既に丁寧語
     if last_orig == "です" || last_orig == "ます" {
-        return part
-            .modify(|part| part.push(sep))
+        return morphs
+            .modify(|morphs| morphs.push(sep))
             .into_iter()
             .map(|x| x.surface)
             .collect::<String>();
@@ -140,21 +150,21 @@ fn to_polite_part(part: Vec<Morpheme>, sep: Morpheme) -> String {
         .expect("failed to convert ます")
     });
 
-    let mut part: Vec<String> = part.into_iter().map(|x| x.surface.to_string()).collect();
+    let mut words: Vec<String> = morphs.into_iter().map(|x| x.surface.to_string()).collect();
 
     if let (Some(desu), Some(masu)) = (desu, masu) {
         if last_conj.form != ConjugationForm::Basic && last_conj.form != ConjugationForm::None {
             // 終止形以外のものにですますをつけるのは違和感があるかくどいかになる
         } else if last_class == WordClass::AuxiliaryVerb && last_orig == "だ" {
-            *part.last_mut().unwrap() = desu;
+            *words.last_mut().unwrap() = desu;
         } else if last_class == WordClass::AuxiliaryVerb && last_orig == "ある" {
             // であるを想定
-            part.pop();
-            if let Some(last) = part.last_mut() {
+            words.pop();
+            if let Some(last) = words.last_mut() {
                 *last = desu;
             } else {
-                part.push("あり".into());
-                part.push(masu);
+                words.push("あり".into());
+                words.push(masu);
             }
         } else if let WordClass::Noun(Noun::CanBeAdverb) = last_class {
             // 単独で「いま」などのパターンがあるので単独で何もしない
@@ -162,7 +172,7 @@ fn to_polite_part(part: Vec<Morpheme>, sep: Morpheme) -> String {
             match last_conj.kind {
                 ConjugationKind::SahenSuruConnected => {
                     // WORKAROUND
-                    *part.last_mut().unwrap() = conjugation::convert(
+                    *words.last_mut().unwrap() = conjugation::convert(
                         last_surface,
                         last_conj.kind,
                         last_conj.form,
@@ -172,14 +182,14 @@ fn to_polite_part(part: Vec<Morpheme>, sep: Morpheme) -> String {
                 }
                 ConjugationKind::SahenZuruConnected => {
                     let last_base = &last_orig[0..last_orig.len() - "ずる".len()];
-                    *part.last_mut().unwrap() = format!("{}じ", last_base);
+                    *words.last_mut().unwrap() = format!("{}じ", last_base);
                 }
                 ConjugationKind::IchidanRu => {
                     // FIXME: なにをすればいいんだ？何が 一段・ル なんだ？
                 }
                 ConjugationKind::SpecialNai | ConjugationKind::SpecialTai => {
                     // WORKAROUND
-                    *part.last_mut().unwrap() = conjugation::convert(
+                    *words.last_mut().unwrap() = conjugation::convert(
                         last_surface,
                         last_conj.kind,
                         last_conj.form,
@@ -188,7 +198,7 @@ fn to_polite_part(part: Vec<Morpheme>, sep: Morpheme) -> String {
                     .expect("failed to convert (special nai/tai)")
                 }
                 _ => {
-                    *part.last_mut().unwrap() = conjugation::convert(
+                    *words.last_mut().unwrap() = conjugation::convert(
                         last_surface,
                         last_conj.kind,
                         last_conj.form,
@@ -197,14 +207,14 @@ fn to_polite_part(part: Vec<Morpheme>, sep: Morpheme) -> String {
                     .expect("failed to convert");
                 }
             }
-            part.push(masu);
+            words.push(masu);
         } else {
-            part.push(desu);
+            words.push(desu);
         }
     }
 
-    part.push(sep.surface.to_string());
-    part.into_iter().collect()
+    words.push(sep.surface.to_string());
+    words.into_iter().collect()
 }
 
 #[cfg(test)]
