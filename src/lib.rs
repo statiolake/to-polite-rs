@@ -1,15 +1,13 @@
 use scopefunc::ScopeFunc;
+use std::iter::FusedIterator;
 use typed_igo::conjugation::{ConjugationForm, ConjugationKind};
-use typed_igo::wordclass::{Noun, Postpositional, Symbol, Verb};
+use typed_igo::wordclass::{Noun, Postpositional, Symbol};
 use typed_igo::{Conjugation, Morpheme, Parser, WordClass};
 
 pub fn to_polite_sentence(parser: &Parser, orig: &str) -> String {
-    parser
-        .parse(orig)
-        .transform(break_into_parts)
-        .into_iter()
-        .map(to_polite_part)
-        .collect()
+    let parsed = parser.parse(orig);
+    let parts = Splitter::new(parsed).break_into_parts();
+    parts.into_iter().map(to_polite_part).collect()
 }
 
 struct Part<'t, 'd> {
@@ -23,77 +21,129 @@ impl<'t, 'd> Part<'t, 'd> {
     }
 }
 
-fn break_into_parts<'t, 'd>(orig: Vec<Morpheme<'t, 'd>>) -> Vec<Part<'t, 'd>> {
-    let mut parts = Vec::new();
-    let mut part = Vec::new();
-    let mut paren_level = 0;
+struct Splitter<'t, 'd, I> {
+    rest: I,
+    curr: Option<Morpheme<'t, 'd>>,
+    next: Option<Morpheme<'t, 'd>>,
+    parts: Vec<Part<'t, 'd>>,
+    part: Vec<Morpheme<'t, 'd>>,
+    paren_level: u32,
+}
 
-    fn add<'t, 'd>(
-        parts: &mut Vec<Part<'t, 'd>>,
-        morphs: &mut Vec<Morpheme<'t, 'd>>,
-        sep: Morpheme<'t, 'd>,
-    ) {
-        use std::mem::replace;
-        parts.push(Part::new(replace(morphs, Vec::new()), sep));
-    }
+impl<'t, 'd, I> Splitter<'t, 'd, I>
+where
+    I: Iterator<Item = Morpheme<'t, 'd>>,
+    I: FusedIterator,
+{
+    fn new<IntoIter>(orig: IntoIter) -> Splitter<'t, 'd, I>
+    where
+        IntoIter: IntoIterator<Item = Morpheme<'t, 'd>, IntoIter = I>,
+    {
+        let mut iter = orig.into_iter();
+        let first = iter.next();
+        let second = iter.next();
 
-    let mut iter = orig.into_iter().peekable();
-    while let Some(morph) = iter.next() {
-        match morph.word_class {
-            WordClass::Symbol(Symbol::OpenParen) => {
-                paren_level += 1;
-                part.push(morph);
-            }
-            WordClass::Symbol(Symbol::CloseParen) => {
-                paren_level -= 1;
-                part.push(morph);
-            }
-            WordClass::Symbol(Symbol::Period) | WordClass::Symbol(Symbol::Comma)
-                if paren_level == 0 =>
-            {
-                add(&mut parts, &mut part, morph);
-            }
-            WordClass::Postpositional(_) if paren_level == 0 => {
-                if iter.peek().map(|m| m.word_class) == Some(WordClass::Verb(Verb::Dependent)) {
-                    part.push(morph);
-                } else {
-                    add(&mut parts, &mut part, morph);
-                }
-            }
-            WordClass::AuxiliaryVerb if paren_level == 0 => {
-                if morph.original_form == "た" {
-                    if let Some(Morpheme {
-                        word_class: WordClass::Noun(_),
-                        ..
-                    }) = part.last()
-                    {
-                        add(&mut parts, &mut part, morph);
-                        continue;
-                    }
-                }
-                part.push(morph);
-            }
-            _ => part.push(morph),
+        Splitter {
+            rest: iter,
+            curr: first,
+            next: second,
+            parts: Vec::new(),
+            part: Vec::new(),
+            paren_level: 0,
         }
     }
 
-    if !part.is_empty() {
-        let period = Morpheme {
-            surface: "。",
-            word_class: WordClass::Symbol(Symbol::Period),
-            conjugation: Conjugation {
-                kind: ConjugationKind::None,
-                form: ConjugationForm::None,
-            },
-            original_form: "。",
-            reading: "。",
-            pronunciation: "。",
-            start: !0,
-        };
-        parts.push(Part::new(part, period));
+    fn is_finished(&self) -> bool {
+        self.curr.is_none()
     }
 
-    parts
+    fn step_once(&mut self) -> Option<Morpheme<'t, 'd>> {
+        use std::mem::replace;
+        replace(&mut self.curr, replace(&mut self.next, self.rest.next()))
+    }
+
+    fn break_part(&mut self) {
+        use std::mem::replace;
+        let part = replace(&mut self.part, Vec::new());
+        let sep = self.step_once().expect("unexpected end");
+        self.parts.push(Part::new(part, sep));
+    }
+
+    fn unwrap_curr(&self) -> &Morpheme<'t, 'd> {
+        self.curr.as_ref().expect("unwrap_curr() called on None")
+    }
+
+    fn push_curr(&mut self) {
+        let curr = self.step_once().expect("unexpected end of iterator");
+        self.part.push(curr);
+    }
+
+    fn push_last(&mut self) {
+        if !self.part.is_empty() {
+            let period = Morpheme {
+                surface: "。",
+                word_class: WordClass::Symbol(Symbol::Period),
+                conjugation: Conjugation {
+                    kind: ConjugationKind::None,
+                    form: ConjugationForm::None,
+                },
+                original_form: "。",
+                reading: "。",
+                pronunciation: "。",
+                start: !0,
+            };
+
+            self.curr = Some(period);
+            self.break_part();
+        }
+    }
+
+    fn break_into_parts(&mut self) -> Vec<Part<'t, 'd>> {
+        while !self.is_finished() {
+            self.handle_paren_count();
+            if self.should_be_break() {
+                self.break_part();
+            } else {
+                self.push_curr();
+            }
+        }
+
+        self.push_last();
+
+        std::mem::replace(&mut self.parts, Vec::new())
+    }
+
+    fn handle_paren_count(&mut self) {
+        match self.unwrap_curr().word_class {
+            WordClass::Symbol(Symbol::OpenParen) => self.paren_level += 1,
+            WordClass::Symbol(Symbol::CloseParen) => self.paren_level -= 1,
+            _ => {}
+        }
+    }
+
+    fn should_be_break(&self) -> bool {
+        use typed_igo::wordclass::{Postpositional as P, Symbol as S};
+        // 括弧深度が 1 以上の場合は引用または発言とみなし、何も変換しない。つまり区切る必要もない。
+        if self.paren_level >= 1 {
+            return false;
+        }
+
+        match self.unwrap_curr().word_class {
+            // 基本は句点での分割
+            WordClass::Symbol(S::Period) => true,
+
+            // だいたい他はそのままでよさそうだったが、接続助詞の「が」の前だけはなんか丁寧語にしな
+            // いと違和感があるのでそこでも分割。
+            //
+            // - (OK) 確認したところ問題ありませんでした。
+            // - (OK) 言ったからには実行します。
+            // - (NG) 今日は良い天気だが明日は雨のようです。 (「今日は良い天気でしたが」にしたい)
+            WordClass::Postpositional(P::Conjunction) => self.unwrap_curr().original_form == "が",
+
+            // それ以外は切らない
+            _ => false,
+        }
+    }
 }
 
 fn to_polite_part(part: Part) -> String {
