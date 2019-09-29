@@ -34,14 +34,45 @@ impl<'t, 'd> Part<'t, 'd> {
 
     fn into_polite(self, last_form: ConjugationForm) -> String {
         use typed_igo::conjugation::{ConjugationForm as F, ConjugationKind as K};
+        use typed_igo::wordclass::Postpositional as P;
+        use typed_igo::Morpheme as M;
+        use typed_igo::WordClass as W;
 
         let Part { mut morphs, sep } = self;
         let sep_surface = sep.map(|x| x.surface).unwrap_or("");
 
+        // まず終助詞を取り出す。
+        let mut ends = Vec::new();
+        loop {
+            match morphs.pop() {
+                Some(M {
+                    word_class: W::Postpositional(P::End),
+                    surface,
+                    ..
+                }) => ends.push(surface),
+
+                Some(M {
+                    word_class: W::Postpositional(P::SupplementaryParallelEnd),
+                    surface,
+                    ..
+                }) => ends.push(surface),
+
+                Some(other) => {
+                    morphs.push(other);
+                    break;
+                }
+
+                None => {
+                    break;
+                }
+            }
+        }
+        let ends: String = ends.into_iter().rev().collect();
+
         // まずは最後の単語を取り出す。もし単語がなければ即 String へ
         let last = match morphs.pop() {
             Some(last) => last,
-            None => return sep_surface.to_string(),
+            None => return ends + sep_surface,
         };
 
         let fixlast = |orig: &str| {
@@ -75,8 +106,6 @@ impl<'t, 'd> Part<'t, 'd> {
         //   - それ以外 : 「です」を追加
         // - 「しよう」などの 「う」 : 未然ウ接続終わりの into_polite() して「う」を追加
         // - それ以外 : 「です」を追加
-        use typed_igo::Morpheme as M;
-        use typed_igo::WordClass as W;
         let without_sep = match last {
             // 「です」「ます」
             M {
@@ -217,10 +246,10 @@ impl<'t, 'd> Part<'t, 'd> {
             } => Part::new(morphs).into_polite(F::NegativeU) + "う",
 
             // それ以外
-            _ => morphs_to_string(&morphs) + "です",
+            M { surface, .. } => morphs_to_string(&morphs) + surface + "です",
         };
 
-        without_sep + sep_surface
+        without_sep + &ends + sep_surface
     }
 }
 
@@ -425,5 +454,9 @@ mod tests {
         # quote3
         "善人はこの世で多くの害をなす。彼らがなす最大の害は、人びとを善人と悪人に分けてしまうことだ。"
         =>"善人はこの世で多くの害をなします。彼らがなす最大の害は、人びとを善人と悪人に分けてしまうことです。"
+
+        # end1
+        "今日はいい天気か。"
+        => "今日はいい天気ですか。"
     }
 }
