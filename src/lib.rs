@@ -33,7 +33,7 @@ impl<'t, 'd> Part<'t, 'd> {
     }
 
     fn into_polite(self, last_form: ConjugationForm) -> String {
-        use typed_igo::conjugation::{ConjugationForm as F, ConjugationKind as K};
+        use typed_igo::conjugation::ConjugationForm as F;
         use typed_igo::wordclass::Postpositional as P;
         use typed_igo::Morpheme as M;
         use typed_igo::WordClass as W;
@@ -75,14 +75,14 @@ impl<'t, 'd> Part<'t, 'd> {
             None => return ends + sep_surface,
         };
 
-        let fixlast = |orig: &str| {
-            let kind = match orig {
-                "です" => K::SpecialDesu,
-                "ます" => K::SpecialMasu,
-                _ => return orig.to_string(),
-            };
-            conjugation::convert(orig, kind, F::Basic, last_form)
-                .expect("failed to convert to specified last form")
+        let fixlast = |orig: &str| match (orig, last_form) {
+            ("です", F::Basic) => "です",
+            ("です", F::NegativeU) => "でしょ",
+
+            ("ます", F::Basic) => "ます",
+            ("ます", F::NegativeU) => "ましょ",
+
+            other => panic!("unsupported pair: {:?}", other),
         };
 
         // とりあえず基本的には最後の単語を変換していけばよいが、いくつか例外もある。
@@ -458,5 +458,9 @@ mod tests {
         # end1
         "今日はいい天気か。"
         => "今日はいい天気ですか。"
+
+        # lets1
+        "今日は勉強をしよう。"
+        => "今日は勉強をしましょう。"
     }
 }
