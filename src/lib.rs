@@ -88,14 +88,14 @@ impl<'t, 'd> Part<'t, 'd> {
                 original_form: "ます",
                 surface,
                 ..
-            } => to_string(&morphs) + surface + "",
+            } => morphs_to_string(&morphs) + surface + "",
 
             // 助動詞の「だ」
             M {
                 word_class: W::AuxiliaryVerb,
                 original_form: "だ",
                 ..
-            } => to_string(&morphs) + &fixlast("です"),
+            } => morphs_to_string(&morphs) + &fixlast("です"),
 
             // 動詞
             M {
@@ -104,7 +104,11 @@ impl<'t, 'd> Part<'t, 'd> {
                 surface,
                 conjugation,
                 ..
-            } => to_string(&morphs) + &continuous(basic, surface, conjugation) + &fixlast("ます"),
+            } => {
+                morphs_to_string(&morphs)
+                    + &make_continuous(basic, surface, conjugation)
+                    + &fixlast("ます")
+            }
 
             // 「ある」
             M {
@@ -116,11 +120,11 @@ impl<'t, 'd> Part<'t, 'd> {
                     word_class: W::AuxiliaryVerb,
                     original_form: "だ",
                     ..
-                }) => to_string(&morphs) + &fixlast("です"),
+                }) => morphs_to_string(&morphs) + &fixlast("です"),
                 Some(M { surface, .. }) => {
-                    to_string(&morphs) + surface + "あり" + &fixlast("ます")
+                    morphs_to_string(&morphs) + surface + "あり" + &fixlast("ます")
                 }
-                None => to_string(&morphs) + "あり" + &fixlast("ます"),
+                None => morphs_to_string(&morphs) + "あり" + &fixlast("ます"),
             },
 
             // 「ない」
@@ -138,21 +142,25 @@ impl<'t, 'd> Part<'t, 'd> {
                     word_class: W::AuxiliaryVerb,
                     original_form: "で",
                     ..
-                }) => to_string(&morphs) + "ではありません",
+                }) => morphs_to_string(&morphs) + "ではありません",
                 Some(M {
                     word_class: W::Verb(_),
                     original_form: basic,
                     surface,
                     conjugation,
                     ..
-                }) => to_string(&morphs) + &continuous(basic, surface, conjugation) + "ません",
+                }) => {
+                    morphs_to_string(&morphs)
+                        + &make_continuous(basic, surface, conjugation)
+                        + "ません"
+                }
                 Some(M {
                     word_class: W::Adjective(_),
                     surface,
                     ..
-                }) => to_string(&morphs) + surface + "ありません",
-                Some(M { surface, .. }) => to_string(&morphs) + surface + "ありません",
-                None => to_string(&morphs) + "ありません",
+                }) => morphs_to_string(&morphs) + surface + "ありません",
+                Some(M { surface, .. }) => morphs_to_string(&morphs) + surface + "ありません",
+                None => morphs_to_string(&morphs) + "ありません",
             },
 
             // 過去の「た」
@@ -170,19 +178,23 @@ impl<'t, 'd> Part<'t, 'd> {
                     original_form: "ます",
                     surface,
                     ..
-                }) => to_string(&morphs) + surface,
+                }) => morphs_to_string(&morphs) + surface,
                 Some(M {
                     word_class: W::Verb(_),
                     original_form: basic,
                     surface,
                     conjugation,
                     ..
-                }) => to_string(&morphs) + &continuous(basic, surface, conjugation) + "ました",
+                }) => {
+                    morphs_to_string(&morphs)
+                        + &make_continuous(basic, surface, conjugation)
+                        + "ました"
+                }
                 Some(M {
                     word_class: W::AuxiliaryVerb,
                     original_form: "だ",
                     ..
-                }) => to_string(&morphs) + "でした",
+                }) => morphs_to_string(&morphs) + "でした",
                 Some(
                     morph @ M {
                         original_form: "ない",
@@ -195,7 +207,7 @@ impl<'t, 'd> Part<'t, 'd> {
                         .into_polite(F::Basic)
                         + "でした"
                 }
-                _ => to_string(&morphs) + "です",
+                _ => morphs_to_string(&morphs) + "です",
             },
 
             // 「しよう」などの 「う」
@@ -205,18 +217,18 @@ impl<'t, 'd> Part<'t, 'd> {
             } => Part::new(morphs).into_polite(F::NegativeU) + "う",
 
             // それ以外
-            _ => to_string(&morphs) + "です",
+            _ => morphs_to_string(&morphs) + "です",
         };
 
         without_sep + sep_surface
     }
 }
 
-fn to_string<'t, 'd>(morphs: &[Morpheme<'t, 'd>]) -> String {
+fn morphs_to_string<'t, 'd>(morphs: &[Morpheme<'t, 'd>]) -> String {
     morphs.iter().map(|m| m.surface).collect()
 }
 
-fn continuous(basic: &str, surface: &str, conjugation: Conjugation) -> String {
+fn make_continuous(basic: &str, surface: &str, conjugation: Conjugation) -> String {
     use conjugation::convert;
     use typed_igo::conjugation::{ConjugationForm as F, ConjugationKind as K};
     let Conjugation { kind, form } = conjugation;
