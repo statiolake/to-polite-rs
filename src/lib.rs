@@ -46,13 +46,13 @@ impl<'t, 'd> Part<'t, 'd> {
         loop {
             match morphs.pop() {
                 Some(M {
-                    word_class: W::Postpositional(P::End),
+                    wordclass: W::Postpositional(P::End),
                     surface,
                     ..
                 }) => ends.push(surface),
 
                 Some(M {
-                    word_class: W::Postpositional(P::SupplementaryParallelEnd),
+                    wordclass: W::Postpositional(P::SupplementaryParallelEnd),
                     surface,
                     ..
                 }) => ends.push(surface),
@@ -111,72 +111,72 @@ impl<'t, 'd> Part<'t, 'd> {
         let without_sep = match last {
             // 「です」「ます」
             M {
-                original_form: "です",
+                basic: "です",
                 surface,
                 ..
             }
             | M {
-                original_form: "ます",
+                basic: "ます",
                 surface,
                 ..
             } => morphs_to_string(&morphs) + surface,
 
             // 助動詞の「だ」
             M {
-                word_class: W::AuxiliaryVerb,
-                original_form: "だ",
+                wordclass: W::AuxiliaryVerb,
+                basic: "だ",
                 ..
-            } => morphs_to_string(&morphs) + &fixlast("です"),
+            } => morphs_to_string(&morphs) + fixlast("です"),
 
             // 動詞
             M {
-                word_class: W::Verb(_),
-                original_form: basic,
+                wordclass: W::Verb(_),
+                basic,
                 surface,
                 conjugation,
                 ..
             } => {
                 morphs_to_string(&morphs)
                     + &make_continuous(basic, surface, conjugation)
-                    + &fixlast("ます")
+                    + fixlast("ます")
             }
 
             // 「ある」
             M {
-                word_class: W::AuxiliaryVerb,
-                original_form: "ある",
+                wordclass: W::AuxiliaryVerb,
+                basic: "ある",
                 ..
             } => match morphs.pop() {
                 Some(M {
-                    word_class: W::AuxiliaryVerb,
-                    original_form: "だ",
+                    wordclass: W::AuxiliaryVerb,
+                    basic: "だ",
                     ..
-                }) => morphs_to_string(&morphs) + &fixlast("です"),
+                }) => morphs_to_string(&morphs) + fixlast("です"),
                 Some(M { surface, .. }) => {
-                    morphs_to_string(&morphs) + surface + "あり" + &fixlast("ます")
+                    morphs_to_string(&morphs) + surface + "あり" + fixlast("ます")
                 }
-                None => morphs_to_string(&morphs) + "あり" + &fixlast("ます"),
+                None => morphs_to_string(&morphs) + "あり" + fixlast("ます"),
             },
 
             // 「ない」
             M {
-                word_class: W::AuxiliaryVerb,
-                original_form: "ない",
+                wordclass: W::AuxiliaryVerb,
+                basic: "ない",
                 ..
             }
             | M {
-                word_class: W::Adjective(_),
-                original_form: "ない",
+                wordclass: W::Adjective(_),
+                basic: "ない",
                 ..
             } => match morphs.pop() {
                 Some(M {
-                    word_class: W::AuxiliaryVerb,
-                    original_form: "で",
+                    wordclass: W::AuxiliaryVerb,
+                    basic: "で",
                     ..
                 }) => morphs_to_string(&morphs) + "ではありません",
                 Some(M {
-                    word_class: W::Verb(_),
-                    original_form: basic,
+                    wordclass: W::Verb(_),
+                    basic,
                     surface,
                     conjugation,
                     ..
@@ -186,7 +186,7 @@ impl<'t, 'd> Part<'t, 'd> {
                         + "ません"
                 }
                 Some(M {
-                    word_class: W::Adjective(_),
+                    wordclass: W::Adjective(_),
                     surface,
                     ..
                 }) => morphs_to_string(&morphs) + surface + "ありません",
@@ -196,23 +196,23 @@ impl<'t, 'd> Part<'t, 'd> {
 
             // 過去の「た」
             M {
-                word_class: W::AuxiliaryVerb,
-                original_form: "た",
+                wordclass: W::AuxiliaryVerb,
+                basic: "た",
                 ..
             } => match morphs.pop() {
                 Some(M {
-                    original_form: "です",
+                    basic: "です",
                     surface,
                     ..
                 })
                 | Some(M {
-                    original_form: "ます",
+                    basic: "ます",
                     surface,
                     ..
                 }) => morphs_to_string(&morphs) + surface + "た",
                 Some(M {
-                    word_class: W::Verb(_),
-                    original_form: basic,
+                    wordclass: W::Verb(_),
+                    basic,
                     surface,
                     conjugation,
                     ..
@@ -222,20 +222,19 @@ impl<'t, 'd> Part<'t, 'd> {
                         + "ました"
                 }
                 Some(M {
-                    word_class: W::AuxiliaryVerb,
-                    original_form: "だ",
+                    wordclass: W::AuxiliaryVerb,
+                    basic: "だ",
                     ..
                 }) => morphs_to_string(&morphs) + "でした",
                 // である -> でした
                 Some(M {
-                    word_class: W::AuxiliaryVerb,
-                    original_form: "ある",
+                    wordclass: W::AuxiliaryVerb,
+                    basic: "ある",
                     ..
                 }) => morphs_to_string(&morphs) + "した",
                 Some(
                     morph @ M {
-                        original_form: "ない",
-                        ..
+                        basic: "ない", ..
                     },
                 ) => {
                     morphs
@@ -249,16 +248,10 @@ impl<'t, 'd> Part<'t, 'd> {
             },
 
             // 「しよう」などの 「う」
-            M {
-                original_form: "う",
-                ..
-            } => Part::new(morphs).into_polite(F::NegativeU) + "う",
+            M { basic: "う", .. } => Part::new(morphs).into_polite(F::NegativeU) + "う",
 
             // 否定の「ん」
-            M {
-                original_form: "ん",
-                ..
-            } => Part::new(morphs).into_polite(F::Negative) + "ん",
+            M { basic: "ん", .. } => Part::new(morphs).into_polite(F::Negative) + "ん",
 
             // それ以外
             M { surface, .. } => morphs_to_string(&morphs) + surface + "です",
@@ -375,7 +368,7 @@ where
     fn handle_paren_count(&mut self) {
         use typed_igo::wordclass::Symbol as S;
         use typed_igo::WordClass as W;
-        match self.unwrap_curr().word_class {
+        match self.unwrap_curr().wordclass {
             W::Symbol(S::OpenParen) => self.paren_level += 1,
             W::Symbol(S::CloseParen) => self.paren_level -= 1,
             _ => {}
@@ -390,7 +383,7 @@ where
             return false;
         }
 
-        match self.unwrap_curr().word_class {
+        match self.unwrap_curr().wordclass {
             // 基本は句点での分割
             W::Symbol(S::Period) => true,
 
@@ -400,7 +393,7 @@ where
             // - (OK) 確認したところ問題ありませんでした。
             // - (OK) 言ったからには実行します。
             // - (NG) 今日は良い天気だが明日は雨のようです。 (「今日は良い天気でしたが」にしたい)
-            W::Postpositional(P::Conjunction) => self.unwrap_curr().original_form == "が",
+            W::Postpositional(P::Conjunction) => self.unwrap_curr().basic == "が",
 
             // それ以外は切らない
             _ => false,
@@ -414,12 +407,12 @@ fn create_period(basic: &'static str) -> Morpheme<'static, 'static> {
     use typed_igo::WordClass as W;
     Morpheme {
         surface: basic,
-        word_class: W::Symbol(S::Period),
+        wordclass: W::Symbol(S::Period),
         conjugation: Conjugation {
             kind: K::None,
             form: F::None,
         },
-        original_form: basic,
+        basic,
         reading: basic,
         pronunciation: basic,
         start: !0,
