@@ -1,23 +1,257 @@
 use scopefunc::ScopeFunc;
 use std::iter::FusedIterator;
-use typed_igo::conjugation::{ConjugationForm, ConjugationKind};
-use typed_igo::wordclass::{Noun, Postpositional, Symbol};
-use typed_igo::{Conjugation, Morpheme, Parser, WordClass};
+use typed_igo::conjugation::ConjugationForm;
+use typed_igo::{Conjugation, Morpheme, Parser};
 
 pub fn to_polite_sentence(parser: &Parser, orig: &str) -> String {
-    let parsed = parser.parse(orig);
-    let parts = Splitter::new(parsed).break_into_parts();
-    parts.into_iter().map(to_polite_part).collect()
+    use typed_igo::conjugation::ConjugationForm as F;
+
+    parser
+        .parse(orig)
+        .transform(Splitter::new)
+        .break_into_parts()
+        .into_iter()
+        .map(|part| part.into_polite(F::Basic))
+        .collect()
 }
 
 struct Part<'t, 'd> {
     morphs: Vec<Morpheme<'t, 'd>>,
-    sep: Morpheme<'t, 'd>,
+    sep: Option<Morpheme<'t, 'd>>,
 }
 
 impl<'t, 'd> Part<'t, 'd> {
-    fn new(morphs: Vec<Morpheme<'t, 'd>>, sep: Morpheme<'t, 'd>) -> Part<'t, 'd> {
-        Part { morphs, sep }
+    fn new(morphs: Vec<Morpheme<'t, 'd>>) -> Part<'t, 'd> {
+        Part { morphs, sep: None }
+    }
+
+    fn with_sep(morphs: Vec<Morpheme<'t, 'd>>, sep: Morpheme<'t, 'd>) -> Part<'t, 'd> {
+        Part {
+            morphs,
+            sep: Some(sep),
+        }
+    }
+
+    fn into_polite(self, last_form: ConjugationForm) -> String {
+        use typed_igo::conjugation::{ConjugationForm as F, ConjugationKind as K};
+
+        let Part { mut morphs, sep } = self;
+        let sep_surface = sep.map(|x| x.surface).unwrap_or("");
+
+        // まずは最後の単語を取り出す。もし単語がなければ即 String へ
+        let last = match morphs.pop() {
+            Some(last) => last,
+            None => return sep_surface.to_string(),
+        };
+
+        let fixlast = |orig: &str| {
+            let kind = match orig {
+                "です" => K::SpecialDesu,
+                "ます" => K::SpecialMasu,
+                _ => return orig.to_string(),
+            };
+            conjugation::convert(orig, kind, F::Basic, last_form)
+                .expect("failed to convert to specified last form")
+        };
+
+        // とりあえず基本的には最後の単語を変換していけばよいが、いくつか例外もある。
+        //
+        // - 「です」「ます」 : 変換の必要なし
+        // - 助動詞の「だ」 : 「です」へ変換
+        // - 動詞 : 連用形に変換して「ます」を追加
+        // - 「ある」
+        //   - 「である」 : 合わせて「です」へ変換
+        //   - それ以外 : 「あります」に変換
+        // - 「ない」
+        //   - 「でない」 : 合わせて「ではありません」に変換
+        //   - 動詞の否定 : 動詞を連用形に変換して「ません」に変換
+        //   - 形容詞の否定 : (形容詞を連用形に変換して)「ありません」に変換
+        //   - それ以外 : 「ありません」に変換
+        // - 過去の「た」 : 一つ前で分ける
+        //   - 「です」「ます」 : 変換の必要なし
+        //   - 動詞 (動いた) : 動詞を連用形に変換し、合わせて「ました」に変換
+        //   - 助動詞の「だ」 : 合わせて「でした」に変換
+        //   - 「ない」 : 「ない」を戻して sep を無にしてもう一回 into_polite() し「でした」を追加
+        //   - それ以外 : 「です」を追加
+        // - 「しよう」などの 「う」 : 未然ウ接続終わりの into_polite() して「う」を追加
+        // - それ以外 : 「です」を追加
+        use typed_igo::Morpheme as M;
+        use typed_igo::WordClass as W;
+        let without_sep = match last {
+            // 「です」「ます」
+            M {
+                original_form: "です",
+                surface,
+                ..
+            }
+            | M {
+                original_form: "ます",
+                surface,
+                ..
+            } => to_string(&morphs) + surface + "",
+
+            // 助動詞の「だ」
+            M {
+                word_class: W::AuxiliaryVerb,
+                original_form: "だ",
+                ..
+            } => to_string(&morphs) + &fixlast("です"),
+
+            // 動詞
+            M {
+                word_class: W::Verb(_),
+                original_form: basic,
+                surface,
+                conjugation,
+                ..
+            } => to_string(&morphs) + &continuous(basic, surface, conjugation) + &fixlast("ます"),
+
+            // 「ある」
+            M {
+                word_class: W::AuxiliaryVerb,
+                original_form: "ある",
+                ..
+            } => match morphs.pop() {
+                Some(M {
+                    word_class: W::AuxiliaryVerb,
+                    original_form: "だ",
+                    ..
+                }) => to_string(&morphs) + &fixlast("です"),
+                Some(M { surface, .. }) => {
+                    to_string(&morphs) + surface + "あり" + &fixlast("ます")
+                }
+                None => to_string(&morphs) + "あり" + &fixlast("ます"),
+            },
+
+            // 「ない」
+            M {
+                word_class: W::AuxiliaryVerb,
+                original_form: "ない",
+                ..
+            }
+            | M {
+                word_class: W::Adjective(_),
+                original_form: "ない",
+                ..
+            } => match morphs.pop() {
+                Some(M {
+                    word_class: W::AuxiliaryVerb,
+                    original_form: "で",
+                    ..
+                }) => to_string(&morphs) + "ではありません",
+                Some(M {
+                    word_class: W::Verb(_),
+                    original_form: basic,
+                    surface,
+                    conjugation,
+                    ..
+                }) => to_string(&morphs) + &continuous(basic, surface, conjugation) + "ません",
+                Some(M {
+                    word_class: W::Adjective(_),
+                    surface,
+                    ..
+                }) => to_string(&morphs) + surface + "ありません",
+                Some(M { surface, .. }) => to_string(&morphs) + surface + "ありません",
+                None => to_string(&morphs) + "ありません",
+            },
+
+            // 過去の「た」
+            M {
+                word_class: W::AuxiliaryVerb,
+                original_form: "た",
+                ..
+            } => match morphs.pop() {
+                Some(M {
+                    original_form: "です",
+                    surface,
+                    ..
+                })
+                | Some(M {
+                    original_form: "ます",
+                    surface,
+                    ..
+                }) => to_string(&morphs) + surface,
+                Some(M {
+                    word_class: W::Verb(_),
+                    original_form: basic,
+                    surface,
+                    conjugation,
+                    ..
+                }) => to_string(&morphs) + &continuous(basic, surface, conjugation) + "ました",
+                Some(M {
+                    word_class: W::AuxiliaryVerb,
+                    original_form: "だ",
+                    ..
+                }) => to_string(&morphs) + "でした",
+                Some(
+                    morph @ M {
+                        original_form: "ない",
+                        ..
+                    },
+                ) => {
+                    morphs
+                        .modify(|ms| ms.push(morph))
+                        .transform(Part::new)
+                        .into_polite(F::Basic)
+                        + "でした"
+                }
+                _ => to_string(&morphs) + "です",
+            },
+
+            // 「しよう」などの 「う」
+            M {
+                original_form: "う",
+                ..
+            } => Part::new(morphs).into_polite(F::NegativeU) + "う",
+
+            // それ以外
+            _ => to_string(&morphs) + "です",
+        };
+
+        without_sep + sep_surface
+    }
+}
+
+fn to_string<'t, 'd>(morphs: &[Morpheme<'t, 'd>]) -> String {
+    morphs.iter().map(|m| m.surface).collect()
+}
+
+fn create_period(basic: &'static str) -> Morpheme<'static, 'static> {
+    use typed_igo::conjugation::{ConjugationForm as F, ConjugationKind as K};
+    use typed_igo::wordclass::Symbol as S;
+    use typed_igo::WordClass as W;
+    Morpheme {
+        surface: basic,
+        word_class: W::Symbol(S::Period),
+        conjugation: Conjugation {
+            kind: K::None,
+            form: F::None,
+        },
+        original_form: basic,
+        reading: basic,
+        pronunciation: basic,
+        start: !0,
+    }
+}
+
+fn continuous(basic: &str, surface: &str, conjugation: Conjugation) -> String {
+    use conjugation::convert;
+    use typed_igo::conjugation::{ConjugationForm as F, ConjugationKind as K};
+    let Conjugation { kind, form } = conjugation;
+
+    match kind {
+        K::SahenSuruConnected => convert(surface, kind, form, F::Negative)
+            .expect("failed to convert (sahen-suru connected)"),
+
+        K::SahenZuruConnected => format!("{}じ", &basic[0..basic.len() - "ずる".len()]),
+
+        // FIXME: なにをすればいいんだ？何が 一段・ル なんだ？
+        K::IchidanRu => basic.to_string(),
+
+        K::SpecialNai | K::SpecialTai => convert(surface, kind, form, F::ContinuousDe)
+            .expect("failed to convert (special nai/tai)"),
+
+        _ => convert(surface, kind, form, F::Continuous).expect("failed to convert"),
     }
 }
 
@@ -66,7 +300,7 @@ where
         use std::mem::replace;
         let part = replace(&mut self.part, Vec::new());
         let sep = self.step_once().expect("unexpected end");
-        self.parts.push(Part::new(part, sep));
+        self.parts.push(Part::with_sep(part, sep));
     }
 
     fn unwrap_curr(&self) -> &Morpheme<'t, 'd> {
@@ -80,20 +314,7 @@ where
 
     fn push_last(&mut self) {
         if !self.part.is_empty() {
-            let period = Morpheme {
-                surface: "。",
-                word_class: WordClass::Symbol(Symbol::Period),
-                conjugation: Conjugation {
-                    kind: ConjugationKind::None,
-                    form: ConjugationForm::None,
-                },
-                original_form: "。",
-                reading: "。",
-                pronunciation: "。",
-                start: !0,
-            };
-
-            self.curr = Some(period);
+            self.curr = Some(create_period("。"));
             self.break_part();
         }
     }
@@ -114,15 +335,18 @@ where
     }
 
     fn handle_paren_count(&mut self) {
+        use typed_igo::wordclass::Symbol as S;
+        use typed_igo::WordClass as W;
         match self.unwrap_curr().word_class {
-            WordClass::Symbol(Symbol::OpenParen) => self.paren_level += 1,
-            WordClass::Symbol(Symbol::CloseParen) => self.paren_level -= 1,
+            W::Symbol(S::OpenParen) => self.paren_level += 1,
+            W::Symbol(S::CloseParen) => self.paren_level -= 1,
             _ => {}
         }
     }
 
     fn should_be_break(&self) -> bool {
         use typed_igo::wordclass::{Postpositional as P, Symbol as S};
+        use typed_igo::WordClass as W;
         // 括弧深度が 1 以上の場合は引用または発言とみなし、何も変換しない。つまり区切る必要もない。
         if self.paren_level >= 1 {
             return false;
@@ -130,7 +354,7 @@ where
 
         match self.unwrap_curr().word_class {
             // 基本は句点での分割
-            WordClass::Symbol(S::Period) => true,
+            W::Symbol(S::Period) => true,
 
             // だいたい他はそのままでよさそうだったが、接続助詞の「が」の前だけはなんか丁寧語にしな
             // いと違和感があるのでそこでも分割。
@@ -138,133 +362,12 @@ where
             // - (OK) 確認したところ問題ありませんでした。
             // - (OK) 言ったからには実行します。
             // - (NG) 今日は良い天気だが明日は雨のようです。 (「今日は良い天気でしたが」にしたい)
-            WordClass::Postpositional(P::Conjunction) => self.unwrap_curr().original_form == "が",
+            W::Postpositional(P::Conjunction) => self.unwrap_curr().original_form == "が",
 
             // それ以外は切らない
             _ => false,
         }
     }
-}
-
-fn to_polite_part(part: Part) -> String {
-    let Part { morphs, sep } = part;
-    let (last_orig, last_surface, last_class, last_conj) = match morphs.last() {
-        Some(last) => (
-            last.original_form,
-            last.surface,
-            last.word_class,
-            last.conjugation,
-        ),
-        None => return sep.original_form.into(),
-    };
-
-    // 既に丁寧語
-    if last_orig == "です" || last_orig == "ます" {
-        return morphs
-            .modify(|morphs| morphs.push(sep))
-            .into_iter()
-            .map(|x| x.surface)
-            .collect::<String>();
-    }
-
-    let desumasu_form = match sep.word_class {
-        WordClass::Postpositional(Postpositional::Conjunction) => match sep.original_form {
-            "て" => Some(ConjugationForm::Continuous),
-            _ => None,
-        },
-        WordClass::Postpositional(_) => None,
-        WordClass::AuxiliaryVerb => match sep.original_form {
-            "た" => Some(ConjugationForm::Continuous),
-            _ => None,
-        },
-        _ => Some(ConjugationForm::Basic),
-    };
-
-    let desu = desumasu_form.map(|form| {
-        conjugation::convert(
-            "です",
-            ConjugationKind::SpecialDesu,
-            ConjugationForm::Basic,
-            form,
-        )
-        .expect("failed to convert です")
-    });
-
-    let masu = desumasu_form.map(|form| {
-        conjugation::convert(
-            "ます",
-            ConjugationKind::SpecialMasu,
-            ConjugationForm::Basic,
-            form,
-        )
-        .expect("failed to convert ます")
-    });
-
-    let mut words: Vec<String> = morphs.into_iter().map(|x| x.surface.to_string()).collect();
-
-    if let (Some(desu), Some(masu)) = (desu, masu) {
-        if last_conj.form != ConjugationForm::Basic && last_conj.form != ConjugationForm::None {
-            // 終止形以外のものにですますをつけるのは違和感があるかくどいかになる
-        } else if last_class == WordClass::AuxiliaryVerb && last_orig == "だ" {
-            *words.last_mut().unwrap() = desu;
-        } else if last_class == WordClass::AuxiliaryVerb && last_orig == "ある" {
-            // であるを想定
-            words.pop();
-            if let Some(last) = words.last_mut() {
-                *last = desu;
-            } else {
-                words.push("あり".into());
-                words.push(masu);
-            }
-        } else if let WordClass::Noun(Noun::CanBeAdverb) = last_class {
-            // 単独で「いま」などのパターンがあるので単独で何もしない
-        } else if let WordClass::Verb(_) = last_class {
-            match last_conj.kind {
-                ConjugationKind::SahenSuruConnected => {
-                    // WORKAROUND
-                    *words.last_mut().unwrap() = conjugation::convert(
-                        last_surface,
-                        last_conj.kind,
-                        last_conj.form,
-                        ConjugationForm::Negative,
-                    )
-                    .expect("failed to convert (sahen-suru connected)");
-                }
-                ConjugationKind::SahenZuruConnected => {
-                    let last_base = &last_orig[0..last_orig.len() - "ずる".len()];
-                    *words.last_mut().unwrap() = format!("{}じ", last_base);
-                }
-                ConjugationKind::IchidanRu => {
-                    // FIXME: なにをすればいいんだ？何が 一段・ル なんだ？
-                }
-                ConjugationKind::SpecialNai | ConjugationKind::SpecialTai => {
-                    // WORKAROUND
-                    *words.last_mut().unwrap() = conjugation::convert(
-                        last_surface,
-                        last_conj.kind,
-                        last_conj.form,
-                        ConjugationForm::ContinuousDe,
-                    )
-                    .expect("failed to convert (special nai/tai)")
-                }
-                _ => {
-                    *words.last_mut().unwrap() = conjugation::convert(
-                        last_surface,
-                        last_conj.kind,
-                        last_conj.form,
-                        ConjugationForm::Continuous,
-                    )
-                    .expect("failed to convert");
-                }
-            }
-            words.push(masu);
-        } else {
-            words.push(desu);
-        }
-    }
-
-    words.push(sep.surface.to_string());
-    words.into_iter().collect()
 }
 
 #[cfg(test)]
@@ -297,7 +400,7 @@ mod tests {
 
         # multiple_sentences
         "どんなに悔いても過去は変わらない。どれほど心配したところで未来もどうなるものでもない。いま、現在に最善を尽くすことである。"
-        => "どんなに悔いても過去は変わらないです。どれほど心配したところで未来もどうなるものでもないです。いま、現在に最善を尽くすことです。"
+        => "どんなに悔いても過去は変わりません。どれほど心配したところで未来もどうなるものでもありません。いま、現在に最善を尽くすことです。"
 
         # quote1
         "最も重要な決定とは、何をするかではなく、何をしないかを決めることだ。"
