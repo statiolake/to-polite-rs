@@ -216,24 +216,6 @@ fn to_string<'t, 'd>(morphs: &[Morpheme<'t, 'd>]) -> String {
     morphs.iter().map(|m| m.surface).collect()
 }
 
-fn create_period(basic: &'static str) -> Morpheme<'static, 'static> {
-    use typed_igo::conjugation::{ConjugationForm as F, ConjugationKind as K};
-    use typed_igo::wordclass::Symbol as S;
-    use typed_igo::WordClass as W;
-    Morpheme {
-        surface: basic,
-        word_class: W::Symbol(S::Period),
-        conjugation: Conjugation {
-            kind: K::None,
-            form: F::None,
-        },
-        original_form: basic,
-        reading: basic,
-        pronunciation: basic,
-        start: !0,
-    }
-}
-
 fn continuous(basic: &str, surface: &str, conjugation: Conjugation) -> String {
     use conjugation::convert;
     use typed_igo::conjugation::{ConjugationForm as F, ConjugationKind as K};
@@ -367,6 +349,24 @@ where
             // それ以外は切らない
             _ => false,
         }
+    }
+}
+
+fn create_period(basic: &'static str) -> Morpheme<'static, 'static> {
+    use typed_igo::conjugation::{ConjugationForm as F, ConjugationKind as K};
+    use typed_igo::wordclass::Symbol as S;
+    use typed_igo::WordClass as W;
+    Morpheme {
+        surface: basic,
+        word_class: W::Symbol(S::Period),
+        conjugation: Conjugation {
+            kind: K::None,
+            form: F::None,
+        },
+        original_form: basic,
+        reading: basic,
+        pronunciation: basic,
+        start: !0,
     }
 }
 
